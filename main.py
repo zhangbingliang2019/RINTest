@@ -2,24 +2,31 @@ from rin_pytorch import GaussianDiffusion, RIN, VideoTrainer
 from dataset import WebVidFast
 import wandb
 
-use_wandb = True
+use_wandb = False
 
-if use_wandb:
-    run = wandb.init(
-        # Set the project where this run will be logged
-         project="RIN-Cond", name='16x336x336')
+image_size = [32, 128, 128]
+patch_size = (2, 8, 8)
+split_factor = 8
+image_size[0] = image_size[0] // split_factor
+cond = {
+    'language': None,
+    'first_frame': (768, image_size[1:], patch_size[1:]),
+    #'entire_video': (768, image_size, patch_size)
+}
+
 
 model = RIN(
-    dim = 768,                  # model dimensions
-    image_size = (16, 336, 336),           # image size
-    patch_size = (2, 8, 8),             # patch size
-    depth = 6,                  # depth
-    num_latents = 512,          # number of latents. they used 256 in the paper
-    dim_latent = 1024,           # can be greater than the image dimension (dim) for greater capacity
+    dim=1024,  # model dimensions
+    image_size=image_size,  # image size
+    patch_size=patch_size,  # patch size
+    depth=6,  # depth
+    num_latents=512,  # number of latents. they used 256 in the paper
+    dim_latent=768,  # can be greater than the image dimension (dim) for greater capacity
     patches_self_attn=False,
-    latent_self_attn_depth = 4, # number of latent self attention blocks per recurrent step, K in the paper
+    latent_self_attn_depth=4,  # number of latent self attention blocks per recurrent step, K in the paper
+    condition_types=cond,
+    frame_split_factor=split_factor
 )
-
 
 
 diffusion = GaussianDiffusion(
@@ -30,15 +37,15 @@ diffusion = GaussianDiffusion(
 )
 
 dataset = WebVidFast("/home/bingliang/data/WebVid2.5M/videos",
-            "/home/bingliang/data/WebVid2.5M/subset_new_info.json",
-                 frame_size=16, overfitting_test=False, return_caption=True, image_size=336)
+                         "/home/bingliang/data/WebVid2.5M/meta_full.json",
+                         image_size=128, frame_size=32, return_caption=True)
 
 
 trainer = VideoTrainer(
     diffusion,
     dataset,
     num_samples = 16,
-    train_batch_size = 32,
+    train_batch_size = 6,
     gradient_accumulate_every = 1,
     train_lr = 1e-4,
     save_and_sample_every = 5000,

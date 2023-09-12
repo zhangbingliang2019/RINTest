@@ -26,7 +26,7 @@ from tqdm.auto import tqdm
 from ema_pytorch import EMA
 
 from accelerate import Accelerator, DistributedDataParallelKwargs
-from language import FrozenCLIPEmbedder
+from rin_pytorch.conditioning import get_embedder, prepare_cond
 
 
 # helpers functions
@@ -337,19 +337,17 @@ class RINBlock(nn.Module):
             dim_latent=None,
             final_norm=True,
             patches_self_attn=True,
+            cond_meta=None,
             **attn_kwargs
     ):
         super().__init__()
         dim_latent = default(dim_latent, dim)
+        self.cond_meta = cond_meta if cond_meta is not None else {}
+        self.setup_cond(dim_latent)
 
         self.latents_attend_to_patches = Attention(dim_latent, dim_context=dim, norm=True, norm_context=True,
                                                    **attn_kwargs)
         self.latents_cross_attn_ff = FeedForward(dim_latent)
-
-        # ADD, language attention
-        self.latents_attend_to_conds = Attention(dim_latent, dim_context=768, norm=True, norm_context=True,
-                                                 **attn_kwargs)
-        self.latents_cross_attn_ff_conds = FeedForward(dim_latent)
 
         self.latent_self_attns = nn.ModuleList([])
         for _ in range(latent_self_attn_depth):
@@ -371,11 +369,14 @@ class RINBlock(nn.Module):
                                                    **attn_kwargs)
         self.patches_cross_attn_ff = FeedForward(dim)
 
-        # ADD, patch to language condition
-
-        self.patches_attend_to_conds = Attention(dim, dim_context=768, norm=True, norm_context=True,
-                                                 **attn_kwargs)
-        self.patches_cross_attn_ff_conds = FeedForward(dim)
+    def setup_cond(self, dim):
+        cond_attn = {}
+        cond_ff = {}
+        for k, v in self.cond_meta.items():
+            cond_attn[k] = Attention(dim, dim_context=v, norm=True, norm_context=True)
+            cond_ff[k] = FeedForward(dim)
+        self.cond_attn = nn.ModuleDict(cond_attn)
+        self.cond_ff = nn.ModuleDict(cond_ff)
 
     def forward(self, patches, latents, t, cond):
         patches = self.patches_peg(patches) + patches
@@ -386,13 +387,12 @@ class RINBlock(nn.Module):
 
         latents = self.latents_cross_attn_ff(latents, time=t) + latents
 
-        # ADD, latents extract
+        # ADD, latent conditioning
 
-        # latent self attention or cluster information from language conditions
+        for k, v in cond.items():
+            latents = self.cond_attn[k](latents, v, time=t) + latents
 
-        latents = self.latents_attend_to_conds(latents, cond, time=t) + latents
-
-        latents = self.latents_cross_attn_ff_conds(latents, time=t) + latents
+            latents = self.cond_ff[k](latents, time=t) + latents
 
         for attn, ff in self.latent_self_attns:
             latents = attn(latents, time=t) + latents
@@ -409,12 +409,6 @@ class RINBlock(nn.Module):
         patches = self.patches_attend_to_latents(patches, latents, time=t) + patches
 
         patches = self.patches_cross_attn_ff(patches, time=t) + patches
-
-        # ADD, patches attend to language conditions
-
-        patches = self.patches_attend_to_conds(patches, cond, time=t) + patches
-
-        patches = self.patches_cross_attn_ff_conds(patches, time=t) + patches
 
         latents = self.latent_final_norm(latents)
         return patches, latents
@@ -438,11 +432,19 @@ class RIN(nn.Module):
             # whether to use 1 latent token as time conditioning, or do it the adaptive layernorm way (which is highly effective as shown by some other papers "Paella" - Dominic Rampas et al.)
             dual_patchnorm=True,
             patches_self_attn=True,
+            condition_types=None,
+            frame_split_factor=None,
             # the self attention in this repository is not strictly with the design proposed in the paper. offer way to remove it, in case it is the source of instability
             **attn_kwargs
+
     ):
         super().__init__()
         dim_latent = default(dim_latent, dim)
+
+        # setup condition modules
+        self.condition_types = condition_types if condition_types is not None else {}
+        self.frame_split_factor = frame_split_factor
+        cond_meta = self.setup_cond()
 
         self.image_size = image_size
         self.channels = channels  # times 2 due to self-conditioning
@@ -532,8 +534,28 @@ class RIN(nn.Module):
             attn_kwargs = {**attn_kwargs, 'time_cond_dim': time_dim}
 
         self.blocks = nn.ModuleList([RINBlock(dim, dim_latent=dim_latent, latent_self_attn_depth=latent_self_attn_depth,
-                                              patches_self_attn=patches_self_attn, **attn_kwargs) for _ in
+                                              patches_self_attn=patches_self_attn, cond_meta=cond_meta, **attn_kwargs) for _ in
                                      range(depth)])
+
+    def setup_cond(self):
+        cond_modules = {}
+        cond_meta = {}
+        for k, v in self.condition_types.items():
+            cond_modules[k], cond_meta[k] = get_embedder(k, v)
+
+        self.cond_modules = nn.ModuleDict(cond_modules)
+        return cond_meta
+
+    def prepare_data_and_cond(self, data, caption, device):
+        cond = {}
+        for k in self.condition_types.keys():
+            cond[k] = prepare_cond(k, data, caption, device, self.frame_split_factor)
+        # split the data
+        if self.frame_split_factor is not None:
+            b, c, f, h, w = data.shape
+            new_data = data.reshape(b, c, self.frame_split_factor, -1, h, w)
+            data = new_data.permute(0, 2, 1, 3, 4, 5).flatten(0, 1)
+        return data, cond
 
     @property
     def device(self):
@@ -543,11 +565,20 @@ class RIN(nn.Module):
             self,
             x,  # (B, C, F, H, W)
             time,  # (B, )
-            cond,  # (B, L, D)
+            cond=None,  # {k: inputs}
             x_self_cond=None,
             latent_self_cond=None,
             return_latents=False
     ):
+        # embed condtion
+        cond_results = {}
+        if cond is not None:
+            for k, v in cond.items():
+                if isinstance(v, tuple):
+                    cond_results[k] = self.cond_modules[k](*v)
+                else:
+                    cond_results[k] = self.cond_modules[k](v)
+
         # print(x.shape)
         # print('+++++++++++++')
         batch = x.shape[0]
@@ -597,7 +628,7 @@ class RIN(nn.Module):
         # the recurrent interface network body
 
         for block in self.blocks:
-            patches, latents = block(patches, latents, t, cond)
+            patches, latents = block(patches, latents, t, cond_results)
 
         # to pixels
 
@@ -1032,22 +1063,30 @@ class VideoTrainer(object):
             mixed_precision_type='fp16',
             split_batches=True,
             convert_image_to=None,
-            use_wandb = False,
+            use_wandb=False,
     ):
         super().__init__()
 
+        self.first_data = None
         self.use_wandb = use_wandb
         self.accelerator = Accelerator(
             split_batches=split_batches,
             mixed_precision=mixed_precision_type if amp else 'no',
             kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)]
         )
+        if self.accelerator.is_main_process:
+            if use_wandb:
+                run = wandb.init(
+                    # Set the project where this run will be logged
+                    project="RIN-Cond", name='16x336x336')
 
-        self.captions = ['Merida, mexico - may 23, 2017: tourists are walking on a roadside near catholic church in the street of mexico at sunny summer day.', 'Fun clown - 3d animation', '11th march 2017. nakhon pathom, thailand. devotees goes into a trance at the wai khru ceremony at wat bang phra temple. what bang phra is famous for its magically charged tattoos and amulets.', 'Decorate with pineapple sweet cake roll.']
-
+        self.captions = [
+            'Merida, mexico - may 23, 2017: tourists are walking on a roadside near catholic church in the street of mexico at sunny summer day.',
+            'Fun clown - 3d animation',
+            '11th march 2017. nakhon pathom, thailand. devotees goes into a trance at the wai khru ceremony at wat bang phra temple. what bang phra is famous for its magically charged tattoos and amulets.',
+            'Decorate with pineapple sweet cake roll.']
 
         self.model = diffusion_model
-        self.text_encoder = FrozenCLIPEmbedder()
 
         assert has_int_squareroot(num_samples), 'number of samples must have an integer square root'
         self.num_samples = num_samples
@@ -1087,7 +1126,7 @@ class VideoTrainer(object):
 
         # prepare model, dataloader, optimizer with accelerator
 
-        self.model, self.opt, self.text_encoder = self.accelerator.prepare(self.model, self.opt, self.text_encoder)
+        self.model, self.opt = self.accelerator.prepare(self.model, self.opt)
 
     def save(self, milestone):
         if not self.accelerator.is_local_main_process:
@@ -1118,10 +1157,14 @@ class VideoTrainer(object):
         if exists(self.accelerator.scaler) and exists(data['scaler']):
             self.accelerator.scaler.load_state_dict(data['scaler'])
 
+    def prepare_data_and_cond(self, data, cond, device):
+        if hasattr(self.model, 'module'):
+            return self.model.module.model.prepare_data_and_cond(data, cond, device)
+        return self.model.model.prepare_data_and_cond(data, cond, device)
+
     def train(self):
         accelerator = self.accelerator
         device = accelerator.device
-        self.text_encoder.device = device
 
         with tqdm(initial=self.step, total=self.train_num_steps, disable=not accelerator.is_main_process) as pbar:
 
@@ -1131,10 +1174,11 @@ class VideoTrainer(object):
 
                 for _ in range(self.gradient_accumulate_every):
                     data, caption = next(self.dl)
+                    if self.step == 0:
+                        self.first_data = data[:2], caption[:2]
                     data = data.to(device)
                     # obtain language embedding
-                    with torch.no_grad():
-                        cond = self.text_encoder(caption)
+                    data, cond = self.prepare_data_and_cond(data, caption, device)
 
                     with accelerator.autocast():
                         loss = self.model(data, cond)
@@ -1144,13 +1188,13 @@ class VideoTrainer(object):
                         accelerator.backward(loss)
 
                 pbar.set_description(f'loss: {total_loss:.4f}')
-                if self.use_wandb:
+                if self.use_wandb and self.accelerator.is_main_process:
                     wandb.log({'loss': total_loss})
 
                 accelerator.wait_for_everyone()
-                accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
 
                 if not torch.any(torch.isnan(loss)):
+                    accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                     self.opt.step()
                 self.opt.zero_grad()
 
@@ -1170,8 +1214,8 @@ class VideoTrainer(object):
                             self.ema.ema_model.eval()
 
                             with torch.no_grad():
-                                cond = self.text_encoder(self.captions)
-                                batches = [len(cond)]
+                                new_data, cond = self.prepare_data_and_cond(*self.first_data, device)
+                                batches = [new_data.size(0)]
                                 all_video_list = list(
                                     map(lambda n: self.ema.ema_model.sample(cond, batch_size=n), batches))
 

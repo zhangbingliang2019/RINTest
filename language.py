@@ -26,12 +26,11 @@ to_ntuple = _ntuple
 
 class FrozenCLIPEmbedder(nn.Module):
     """Uses the CLIP transformer encoder for text (from Hugging Face)"""
-    def __init__(self, version="openai/clip-vit-large-patch14", device='cuda', max_length=77):
+    def __init__(self, version="openai/clip-vit-large-patch14", max_length=77):
         super().__init__()
         self.tokenizer = CLIPTokenizer.from_pretrained(version)
         self.transformer = CLIPTextModel.from_pretrained(version)
         self.max_length = max_length
-        self.device = device
         self.freeze()
 
     def freeze(self):
@@ -39,11 +38,11 @@ class FrozenCLIPEmbedder(nn.Module):
         for param in self.parameters():
             param.requires_grad = False
 
-    def forward(self, text):
+    def forward(self, text, device):
         with torch.no_grad():
             batch_encoding = self.tokenizer(text, truncation=True, max_length=self.max_length, return_length=True,
                                             return_overflowing_tokens=False, padding="max_length", return_tensors="pt")
-            tokens = batch_encoding["input_ids"].to(self.device)
+            tokens = batch_encoding["input_ids"].to(device)
             outputs = self.transformer(input_ids=tokens)
 
             z = outputs.last_hidden_state

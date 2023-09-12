@@ -4,15 +4,16 @@ import wandb
 
 use_wandb = False
 
-image_size = [32, 128, 128]
-patch_size = (2, 8, 8)
+image_size = [32, 64, 64]
+patch_size = (1, 2, 2)
 split_factor = 8
 image_size[0] = image_size[0] // split_factor
 cond = {
     'language': None,
     'first_frame': (768, image_size[1:], patch_size[1:]),
-    #'entire_video': (768, image_size, patch_size)
+    'entire_video': (768, image_size, patch_size)
 }
+exp_name = 'unconditional-frame-64x128x128'
 
 
 model = RIN(
@@ -31,27 +32,28 @@ model = RIN(
 
 diffusion = GaussianDiffusion(
     model,
-    timesteps = 400,
+    timesteps = 1000,
     train_prob_self_cond = 0.9,  # how often to self condition on latents
     scale = 1.                   # this will be set to < 1. for more noising and leads to better convergence when training on higher resolution images (512, 1024) - input noised images will be auto variance normalized
 )
 
 dataset = WebVidFast("/home/bingliang/data/WebVid2.5M/videos",
                          "/home/bingliang/data/WebVid2.5M/meta_full.json",
-                         image_size=128, frame_size=32, return_caption=True)
+                         image_size=64, frame_size=32, return_caption=True)
 
 
 trainer = VideoTrainer(
     diffusion,
     dataset,
     num_samples = 16,
-    train_batch_size = 6,
+    train_batch_size = 2,
     gradient_accumulate_every = 1,
     train_lr = 1e-4,
     save_and_sample_every = 5000,
     train_num_steps = 1000000,         # total training steps
     ema_decay = 0.995,                # exponential moving average decay
-    use_wandb = use_wandb
+    use_wandb = use_wandb,
+    exp_name = exp_name
 )
 
 trainer.train()

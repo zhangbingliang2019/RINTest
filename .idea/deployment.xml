@@ -1,9 +1,51 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="61205" remoteFilesAllowedToDisappearOnAutoupload="false" confirmBeforeUploading="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="61202" remoteFilesAllowedToDisappearOnAutoupload="false" confirmBeforeUploading="false" showAutoUploadSettingsWarning="false">
     <option name="confirmBeforeUploading" value="false" />
     <serverData>
+      <paths name="61201">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/rin" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="61202">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/rin" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="61203">
+        <serverdata>
+          <mappings>
+            <mapping deploy="rin" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="61204">
+        <serverdata>
+          <mappings>
+            <mapping deploy="rin" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="61205">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/rin" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="61206">
+        <serverdata>
+          <mappings>
+            <mapping deploy="rin" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="61208">
         <serverdata>
           <mappings>
             <mapping deploy="/rin" local="$PROJECT_DIR$" web="/" />

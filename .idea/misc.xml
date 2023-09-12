@@ -3,5 +3,5 @@
   <component name="MarkdownSettingsMigration">
     <option name="stateVersion" value="1" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="$USER_HOME$/anaconda3" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="Remote Python 3.10.12 (sftp://bingliang@rp-a100-80gb-8x-hba002.cloud.together.ai:61202/home/bingliang/miniconda3/envs/DiT/bin/python)" project-jdk-type="Python SDK" />
 </project>

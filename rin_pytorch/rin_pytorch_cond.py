@@ -1064,6 +1064,7 @@ class VideoTrainer(object):
             split_batches=True,
             convert_image_to=None,
             use_wandb=False,
+            exp_name ='test',
     ):
         super().__init__()
 
@@ -1078,7 +1079,7 @@ class VideoTrainer(object):
             if use_wandb:
                 run = wandb.init(
                     # Set the project where this run will be logged
-                    project="RIN-Cond", name='16x336x336')
+                    project="RIN-Cond", name=exp_name)
 
         self.captions = [
             'Merida, mexico - may 23, 2017: tourists are walking on a roadside near catholic church in the street of mexico at sunny summer day.',
